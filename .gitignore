@@ -1,0 +1,32 @@
+# ---- 依赖与构建产物 ----
+node_modules
+dist
+dist.bak.*
+src-tauri/target
+src-tauri/gen
+
+# ---- 个人数据与密钥（永不提交） ----
+*.db
+*.db-journal
+ai_config.json
+ai_last_report.json
+.env*
+*.log
+
+# ---- 工作区记忆与诊断脚本（含个人上下文/本机路径） ----
+.workbuddy/
+diag*.py
+
+# ---- 本机专用启动脚本 ----
+*.vbs
+
+# ---- 设计草稿与临时文件 ----
+cover.jpg
+cover_cropped_preview.png
+ai-review-preview.html
+todo.txt
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+/MirrorFin.ico

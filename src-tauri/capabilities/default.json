@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "sql:default",
+    "sql:allow-execute",
+    "dialog:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://fundgz.1234567.com.cn/*" },
+        { "url": "https://fund.eastmoney.com/*" },
+        { "url": "https://api.fund.eastmoney.com/*" },
+        { "url": "http://api.fund.eastmoney.com/*" },
+        { "url": "https://qt.gtimg.cn/*" },
+        { "url": "https://web.ifzq.gtimg.cn/*" }
+      ]
+    }
+  ]
+}
