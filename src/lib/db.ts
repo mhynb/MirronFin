@@ -354,7 +354,8 @@ export async function updateTransaction(id: number, t: NewTxn): Promise<void> {
 export interface TxnFilter {
   month?: string; // YYYY-MM
   type?: TxnType | "all";
-  categoryId?: number | "all";
+  /** "unclassified" = 只看 category_id 为空的流水 */
+  categoryId?: number | "all" | "unclassified";
 }
 
 export async function listTransactions(
@@ -372,8 +373,12 @@ export async function listTransactions(
     params.push(filter.type);
   }
   if (filter.categoryId && filter.categoryId !== "all") {
-    where.push("t.category_id = $" + (params.length + 1));
-    params.push(filter.categoryId);
+    if (filter.categoryId === "unclassified") {
+      where.push("t.category_id IS NULL");
+    } else {
+      where.push("t.category_id = $" + (params.length + 1));
+      params.push(filter.categoryId);
+    }
   }
   const sql = `
     SELECT t.*, a.name AS account_name, c.name AS category_name,
@@ -447,7 +452,8 @@ export async function categoryBreakdown(
 ): Promise<CategoryValue[]> {
   const db = await getDb();
   const rows = await db.select<CategoryValue[]>(
-    `SELECT COALESCE(c.name, '未分类') AS name, SUM(t.amount) AS value
+    `SELECT t.category_id AS id, COALESCE(c.name, '未分类') AS name,
+            SUM(t.amount) AS value, COUNT(*) AS count
      FROM transactions t
      LEFT JOIN categories c ON c.id = t.category_id
      WHERE t.type = 'expense' AND substr(t.date, 1, 7) = $1
@@ -456,18 +462,25 @@ export async function categoryBreakdown(
     [month]
   );
   if (scope === "all") {
-    const inv = await db.select<{ v: number | null }[]>(
-      `SELECT SUM(amount) AS v FROM investment_transactions
+    const inv = await db.select<{ v: number | null; c: number }[]>(
+      `SELECT SUM(amount) AS v, COUNT(*) AS c FROM investment_transactions
        WHERE type = 'buy' AND substr(date, 1, 7) = $1`,
       [month]
     );
-    const tr = await db.select<{ v: number | null }[]>(
-      `SELECT SUM(amount) AS v FROM transactions
+    const tr = await db.select<{ v: number | null; c: number }[]>(
+      `SELECT SUM(amount) AS v, COUNT(*) AS c FROM transactions
        WHERE type = 'transfer' AND substr(date, 1, 7) = $1`,
       [month]
     );
     const extra = (inv[0].v ?? 0) + (tr[0].v ?? 0);
-    if (extra > 0) rows.push({ name: "投资/转账", value: extra });
+    if (extra > 0) {
+      rows.push({
+        id: null,
+        name: "投资/转账",
+        value: extra,
+        count: (inv[0].c ?? 0) + (tr[0].c ?? 0),
+      });
+    }
   }
   return rows;
 }

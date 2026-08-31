@@ -40,6 +40,10 @@ export interface MonthSummary {
 export interface CategoryValue {
   name: string;
   value: number;
+  /** 分类 id；"未分类" 与 "投资/转账" 聚合项为 null */
+  id: number | null;
+  /** 笔数：金额与频次常常是两个故事（人情 2 笔 9800 vs 餐饮 57 笔 1031） */
+  count: number;
 }
 
 export interface MonthPoint {

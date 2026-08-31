@@ -423,6 +423,122 @@ input[type="number"] {
   flex-wrap: wrap;
 }
 
+/* ---------- 支出分类快筛格（位于明细卡片顶部，点选即筛明细） ----------
+   横向铺开而非纵向堆叠：半宽卡片里塞 6 列信息会挤，铺满整行每格有 150px+ */
+
+.cat-strip {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 明细标题右侧的操作提示（与标题同一行，避免两个小标题上下叠着显得平） */
+.txn-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cat-strip-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.cat-pills {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));
+  gap: 8px;
+}
+
+.cat-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.cat-pill:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.cat-pill.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.cat-pill:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.cat-pill-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cat-pill-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cat-pill-amt {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cat-pill-bot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cat-pill-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-page);
+  overflow: hidden;
+}
+
+.cat-pill-bar i {
+  display: block;
+  height: 100%;
+  /* 占比 0~1% 的分类（娱乐/交通等）也要看得见一点条 */
+  min-width: 4px;
+  border-radius: 2px;
+}
+
+.cat-pill-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .txn-list {
   list-style: none;
 }

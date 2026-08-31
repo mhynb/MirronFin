@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import Chart from "../components/Chart";
+import Chart, { type ChartEventParams } from "../components/Chart";
 import EditTxnModal from "../components/EditTxnModal";
 import { IconEdit, IconTrash } from "../components/Icons";
 import {
@@ -11,7 +11,7 @@ import {
   listTransactions,
   monthlySeries,
 } from "../lib/db";
-import { FALL, RISE } from "../lib/echarts-theme";
+import { FALL, PALETTE, RISE } from "../lib/echarts-theme";
 import { currentMonth, dayLabel, fmtMoney, monthLabel } from "../lib/format";
 import type {
   Account,
@@ -52,7 +52,9 @@ function daySum(items: Transaction[]): { income: number; expense: number } {
 export default function TransactionsPage() {
   const [month, setMonth] = useState(currentMonth());
   const [type, setType] = useState<TxnType | "all">("all");
-  const [categoryId, setCategoryId] = useState<number | "all">("all");
+  const [categoryId, setCategoryId] = useState<number | "all" | "unclassified">(
+    "all"
+  );
   const [scope, setScope] = useState<"consume" | "all">("consume");
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [cats, setCats] = useState<Category[]>([]);
@@ -91,25 +93,69 @@ export default function TransactionsPage() {
     await reload();
   }
 
+  /** 本月支出总额（饼图中心显示 + 汇总榜占比的分母） */
+  const totalExpense = pieData.reduce((s, r) => s + r.value, 0);
+
+  /** 汇总榜点选：点已选中项即取消；筛选时锁定 type=支出（榜统计的就是支出） */
+  function pickCategory(r: CategoryValue) {
+    // "投资/转账"是跨表聚合项，无法按单一 category_id 筛选
+    if (r.id === null && r.name !== "未分类") return;
+    const next: number | "all" | "unclassified" =
+      r.id === null
+        ? categoryId === "unclassified"
+          ? "all"
+          : "unclassified"
+        : categoryId === r.id
+        ? "all"
+        : r.id;
+    setCategoryId(next);
+    if (next !== "all") setType("expense");
+  }
+
+  /** 当前筛选中的分类名（明细标题上的可点 chip） */
+  const selectedCatName =
+    categoryId === "all"
+      ? null
+      : categoryId === "unclassified"
+      ? "未分类"
+      : (cats.find((c) => c.id === categoryId)?.name ?? null);
+
   const groups = useMemo(() => groupByDate(txns), [txns]);
 
   const pieOption = {
+    title: {
+      text: "¥" + fmtMoney(totalExpense),
+      subtext: totalExpense > 0 ? `本月支出 · ${pieData.length} 类` : "本月支出",
+      left: "50%",
+      top: "38%",
+      textAlign: "center" as const,
+      textStyle: { fontSize: 18, fontWeight: 600, color: "#1D1D1F" },
+      subtextStyle: { fontSize: 11, color: "#6E6E73" },
+    },
     tooltip: {
       trigger: "item",
       valueFormatter: (v: unknown) => "¥" + fmtMoney(Number(v)),
     },
-    legend: { bottom: 0 },
+    // 不显示 legend：下方快筛格已有「色点+分类名+金额+占比」，重复且占高度
     series: [
       {
         type: "pie",
-        radius: ["46%", "70%"],
-        center: ["50%", "44%"],
+        radius: ["56%", "78%"],
+        center: ["50%", "48%"],
         itemStyle: { borderRadius: 6, borderColor: "#fff", borderWidth: 2 },
         label: { show: false },
         emphasis: { scaleSize: 4 },
         data: pieData,
       },
     ],
+  };
+
+  /** 点饼图扇区 = 点汇总榜对应那一行 */
+  const pieEvents = {
+    click: (p: ChartEventParams) => {
+      const hit = pieData.find((r) => r.name === p.name);
+      if (hit) pickCategory(hit);
+    },
   };
 
   const barOption = {
@@ -180,11 +226,17 @@ export default function TransactionsPage() {
             <select
               className="select"
               value={categoryId}
-              onChange={(e) =>
+              onChange={(e) => {
+                const v = e.target.value;
+                // 注意：不能对 "unclassified" 取 Number()，否则变 NaN 传进 SQL
                 setCategoryId(
-                  e.target.value === "all" ? "all" : Number(e.target.value)
-                )
-              }
+                  v === "all"
+                    ? "all"
+                    : v === "unclassified"
+                    ? "unclassified"
+                    : Number(v)
+                );
+              }}
             >
               <option value="all">全部</option>
               {cats.map((c) => (
@@ -192,6 +244,7 @@ export default function TransactionsPage() {
                   {c.name}
                 </option>
               ))}
+              <option value="unclassified">未分类</option>
             </select>
           </div>
           <div className="field" style={{ marginLeft: "auto" }}>
@@ -214,6 +267,7 @@ export default function TransactionsPage() {
         </div>
       </div>
 
+      {/* 两个卡片都只放一张图 → 天然等高，不再出现「左边比右边长一截」 */}
       <div className="grid-2 section-gap">
         <div className="card">
           <div className="card-title">
@@ -225,7 +279,7 @@ export default function TransactionsPage() {
               <div className="empty-sub">本月暂无支出记录</div>
             </div>
           ) : (
-            <Chart option={pieOption} height={260} />
+            <Chart option={pieOption} height={260} onEvents={pieEvents} />
           )}
         </div>
         <div className="card">
@@ -235,7 +289,67 @@ export default function TransactionsPage() {
       </div>
 
       <div className="card">
-        <div className="card-title">流水明细 · {txns.length} 条</div>
+        <div className="card-title txn-head">
+          <span>流水明细 · {txns.length} 条</span>
+          {pieData.length > 0 && (
+            <span className="cat-strip-hint">
+              {selectedCatName
+                ? `已筛选「${selectedCatName}」，再点一次取消`
+                : "点击分类，只看它的明细"}
+            </span>
+          )}
+        </div>
+
+        {pieData.length > 0 && (
+          <div className="cat-strip">
+            <div className="cat-pills">
+              {pieData.map((r, i) => {
+                const pct =
+                  totalExpense > 0 ? (r.value / totalExpense) * 100 : 0;
+                const active =
+                  r.id === null
+                    ? categoryId === "unclassified" && r.name === "未分类"
+                    : categoryId === r.id;
+                const clickable = r.id !== null || r.name === "未分类";
+                const color = PALETTE[i % PALETTE.length];
+                return (
+                  <button
+                    key={r.name}
+                    className={"cat-pill" + (active ? " active" : "")}
+                    disabled={!clickable}
+                    title={
+                      clickable
+                        ? active
+                          ? "点击取消筛选"
+                          : `只看「${r.name}」的明细（${r.count} 笔）`
+                        : "投资/转账为聚合项，无法按单一分类筛选"
+                    }
+                    onClick={() => pickCategory(r)}
+                  >
+                    <span className="cat-pill-top">
+                      <span
+                        className="cat-dot"
+                        style={{ background: color }}
+                      />
+                      <span className="cat-pill-name">{r.name}</span>
+                      <span className="cat-pill-amt">¥{fmtMoney(r.value)}</span>
+                    </span>
+                    <span className="cat-pill-bot">
+                      <span className="cat-pill-bar">
+                        <i style={{ width: pct + "%", background: color }} />
+                      </span>
+                      <span className="cat-pill-meta">
+                        {pct >= 10 ? pct.toFixed(0) : pct.toFixed(1)}% ·{" "}
+                        {r.count} 笔
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {txns.length === 0 ? (
           <div className="empty">
             <div className="empty-title">当前筛选下没有流水</div>
