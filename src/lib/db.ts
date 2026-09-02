@@ -9,6 +9,7 @@ import type {
   CategoryType,
   CategoryValue,
   ClosePoint,
+  ExpensePace,
   InvestmentTxn,
   InvestTxnType,
   MonthPoint,
@@ -499,6 +500,36 @@ export async function monthlySeries(n: number): Promise<MonthPoint[]> {
     [n]
   );
   return rows.reverse();
+}
+
+/**
+ * 支出节奏：本月（纯消费）支出总额、有支出的天数、单日峰值。
+ * 天数值由前端按「当前月=已过天数 / 历史月=整月天数」推导，这里只给日粒度事实。
+ */
+export async function expensePace(month: string): Promise<ExpensePace> {
+  const db = await getDb();
+  const rows = await db.select<
+    { total: number | null; active_days: number }[]
+  >(
+    `SELECT COALESCE(SUM(amount), 0) AS total,
+            COUNT(DISTINCT date) AS active_days
+     FROM transactions
+     WHERE type = 'expense' AND substr(date, 1, 7) = $1`,
+    [month]
+  );
+  const peak = await db.select<{ d: number | null }[]>(
+    `SELECT MAX(s) AS d FROM (
+       SELECT SUM(amount) AS s FROM transactions
+       WHERE type = 'expense' AND substr(date, 1, 7) = $1
+       GROUP BY date
+     )`,
+    [month]
+  );
+  return {
+    total: rows[0]?.total ?? 0,
+    activeDays: rows[0]?.active_days ?? 0,
+    peakDay: peak[0]?.d ?? 0,
+  };
 }
 
 // ---------- 投资：标的 ----------

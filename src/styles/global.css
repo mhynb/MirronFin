@@ -446,6 +446,95 @@ input[type="number"] {
   color: var(--text-tertiary);
 }
 
+/* ---------- 支出节奏：日均指标带 ----------
+   横跨整页宽度，不塞进半宽卡片 → 每格 180px+，既宽裕也不破坏下方两图等高 */
+
+.pace-strip {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.pace-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  flex: 1 1 0;
+  min-width: 126px;
+  padding: 2px 18px;
+  border-left: 1px solid var(--border);
+}
+
+.pace-cell:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+
+/* 主指标（日均支出）占更宽、字更大 → 形成视觉重心，其余为辅助 */
+.pace-cell.lead {
+  flex: 1.5 1 0;
+  min-width: 168px;
+}
+
+.pace-cell.lead .pace-value {
+  font-size: 27px;
+}
+
+/* 趋势线给足宽度，迷你图才不会挤成一条 */
+.pace-cell.pace-trend {
+  flex: 1.6 1 0;
+  min-width: 150px;
+}
+
+.pace-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.pace-value {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* 「¥」和「/天」降级成辅助信息，把视觉重量留给数字本身 */
+.pace-value i {
+  font-style: normal;
+  font-size: 0.62em;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin-right: 2px;
+}
+
+.pace-value em {
+  font-style: normal;
+  font-size: 0.55em;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  margin-left: 3px;
+}
+
+.pace-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 窄屏折成两列后去掉竖分隔线，避免行首出现悬空边框 */
+@media (max-width: 880px) {
+  .pace-cell {
+    flex-basis: 42%;
+    border-left: none;
+    padding-left: 0;
+    padding-bottom: 10px;
+  }
+}
+
 .cat-pills {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));

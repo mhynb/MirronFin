@@ -6,6 +6,7 @@ import { IconEdit, IconTrash } from "../components/Icons";
 import {
   categoryBreakdown,
   deleteTransaction,
+  expensePace,
   listAccounts,
   listCategories,
   listTransactions,
@@ -17,6 +18,7 @@ import type {
   Account,
   Category,
   CategoryValue,
+  ExpensePace,
   MonthPoint,
   Transaction,
   TxnType,
@@ -61,6 +63,11 @@ export default function TransactionsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [pieData, setPieData] = useState<CategoryValue[]>([]);
   const [series, setSeries] = useState<MonthPoint[]>([]);
+  const [pace, setPace] = useState<ExpensePace>({
+    total: 0,
+    activeDays: 0,
+    peakDay: 0,
+  });
   const [editing, setEditing] = useState<Transaction | null>(null);
 
   useEffect(() => {
@@ -69,14 +76,16 @@ export default function TransactionsPage() {
   }, []);
 
   const reload = useCallback(async () => {
-    const [t, p, s] = await Promise.all([
+    const [t, p, s, pc] = await Promise.all([
       listTransactions({ month, type, categoryId }),
       categoryBreakdown(month, scope),
       monthlySeries(6),
+      expensePace(month),
     ]);
     setTxns(t);
     setPieData(p);
     setSeries(s);
+    setPace(pc);
   }, [month, type, categoryId, scope]);
 
   useEffect(() => {
@@ -121,6 +130,66 @@ export default function TransactionsPage() {
       : (cats.find((c) => c.id === categoryId)?.name ?? null);
 
   const groups = useMemo(() => groupByDate(txns), [txns]);
+
+  /**
+   * 支出节奏。分母是关键：当前月按「已过天数」，历史月按「整月天数」——
+   * 否则 9 月 2 号去看日均会被除以 30，数字低得毫无意义。
+   */
+  const paceStats = useMemo(() => {
+    const daysIn = (m: string) => {
+      const [y, mo] = m.split("-").map(Number);
+      return new Date(y, mo, 0).getDate();
+    };
+    const isCurrent = month === currentMonth();
+    const daysInMonth = daysIn(month);
+    const elapsed = isCurrent ? new Date().getDate() : daysInMonth;
+
+    const daily = elapsed > 0 ? pace.total / elapsed : 0;
+    const activeDaily = pace.activeDays > 0 ? pace.total / pace.activeDays : 0;
+
+    // 月初样本太少时不做对比：9 月 2 号的「环比 -90%」技术上没错，
+    // 但会让人误以为省钱了——宁可不给数字，也不给误导性的数字。
+    const enoughSample = elapsed >= 5;
+
+    // series 升序；取「早于当前月」的最后一项作上月（当前月无数据时也能取到）
+    const prev = series.filter((s) => s.month < month).pop() ?? null;
+    const prevDaily = prev ? prev.expense / daysIn(prev.month) : null;
+
+    // 近 6 月基线：Σ支出 / Σ天数（当前月按已过天数，否则低估）
+    let sumAmt = 0;
+    let sumDays = 0;
+    for (const s of series) {
+      sumAmt += s.expense;
+      sumDays +=
+        s.month === currentMonth() ? new Date().getDate() : daysIn(s.month);
+    }
+    const baseline = sumDays > 0 ? sumAmt / sumDays : 0;
+
+    const trend = series.map((s) => {
+      const d =
+        s.month === currentMonth() ? new Date().getDate() : daysIn(s.month);
+      return { month: s.month, daily: d > 0 ? s.expense / d : 0 };
+    });
+
+    const diff = (base: number | null) =>
+      enoughSample && base && base > 0 ? ((daily - base) / base) * 100 : null;
+
+    return {
+      isCurrent,
+      enoughSample,
+      spanMonths: series.length,
+      daysInMonth,
+      elapsed,
+      daily,
+      activeDaily,
+      prevDaily,
+      baseline,
+      trend,
+      vsPrev: diff(prevDaily),
+      vsBase: diff(baseline),
+      peak: pace.peakDay,
+    };
+  }, [pace, series, month]);
 
   const pieOption = {
     title: {
@@ -184,6 +253,37 @@ export default function TransactionsPage() {
         data: series.map((p) => p.expense),
         itemStyle: { color: FALL, borderRadius: [4, 4, 0, 0] },
         barMaxWidth: 18,
+      },
+    ],
+  };
+
+  /** 近 6 月日均走势：迷你趋势线，不显示坐标轴 */
+  const sparkOption = {
+    grid: { left: 4, right: 4, top: 8, bottom: 6 },
+    tooltip: {
+      trigger: "axis",
+      formatter: (ps: { dataIndex: number }[]) => {
+        const t = paceStats.trend[ps[0].dataIndex];
+        return t ? `${Number(t.month.slice(5))}月 · ¥${fmtMoney(t.daily)}/天` : "";
+      },
+    },
+    xAxis: {
+      type: "category",
+      show: false,
+      boundaryGap: false,
+      data: paceStats.trend.map((t) => t.month),
+    },
+    yAxis: { type: "value", show: false },
+    series: [
+      {
+        type: "line",
+        smooth: true,
+        symbol: "circle",
+        symbolSize: 4,
+        data: paceStats.trend.map((t) => t.daily),
+        lineStyle: { width: 2, color: FALL },
+        itemStyle: { color: FALL },
+        areaStyle: { color: "rgba(24,160,88,0.12)" },
       },
     ],
   };
@@ -266,6 +366,106 @@ export default function TransactionsPage() {
           </div>
         </div>
       </div>
+
+      {/* 支出节奏：横跨整页的指标带。不塞进半宽卡片 → 空间宽裕，也不破坏下方两图等高 */}
+      {pace.total > 0 && (
+        <div className="card section-gap">
+          <div className="card-title txn-head">
+            <span>支出节奏</span>
+            <span className="cat-strip-hint">
+              {paceStats.isCurrent
+                ? `按已过 ${paceStats.elapsed}/${paceStats.daysInMonth} 天计`
+                : `按全月 ${paceStats.daysInMonth} 天计`}
+              {" · "}纯消费口径
+            </span>
+          </div>
+          <div className="pace-strip">
+            <div className="pace-cell lead">
+              <span className="pace-label">日均支出</span>
+              <span className="pace-value num">
+                <i>¥</i>
+                {fmtMoney(paceStats.daily)}
+                <em>/天</em>
+              </span>
+              <span className="pace-sub">
+                已花 ¥{fmtMoney(pace.total)}
+                {paceStats.isCurrent && paceStats.elapsed <= 3
+                  ? " · 月初样本少"
+                  : ""}
+              </span>
+            </div>
+
+            <div className="pace-cell">
+              <span className="pace-label">环比上月</span>
+              <span
+                className="pace-value num"
+                style={{
+                  color:
+                    paceStats.vsPrev === null
+                      ? undefined
+                      : paceStats.vsPrev >= 0
+                      ? "var(--rise)"
+                      : "var(--fall)",
+                }}
+              >
+                {paceStats.vsPrev === null
+                  ? "—"
+                  : `${paceStats.vsPrev >= 0 ? "+" : ""}${paceStats.vsPrev.toFixed(0)}%`}
+              </span>
+              <span className="pace-sub">
+                {paceStats.prevDaily === null
+                  ? "暂无上月数据"
+                  : !paceStats.enoughSample
+                  ? "满 5 天后可对比"
+                  : `上月 ¥${fmtMoney(paceStats.prevDaily)}/天`}
+              </span>
+            </div>
+
+            <div className="pace-cell">
+              <span className="pace-label">
+                近 {paceStats.spanMonths} 月日均
+              </span>
+              <span className="pace-value num">
+                <i>¥</i>
+                {fmtMoney(paceStats.baseline)}
+              </span>
+              <span
+                className="pace-sub"
+                style={{
+                  color:
+                    paceStats.vsBase === null
+                      ? undefined
+                      : paceStats.vsBase >= 0
+                      ? "var(--rise)"
+                      : "var(--fall)",
+                }}
+              >
+                {paceStats.vsBase === null
+                  ? "长期基线"
+                  : `${paceStats.vsBase >= 0 ? "高于" : "低于"}基线 ${Math.abs(
+                      paceStats.vsBase
+                    ).toFixed(0)}%`}
+              </span>
+            </div>
+
+            <div className="pace-cell" title={`单日峰值 ¥${fmtMoney(paceStats.peak)}`}>
+              <span className="pace-label">花钱日日均</span>
+              <span className="pace-value num">
+                <i>¥</i>
+                {fmtMoney(paceStats.activeDaily)}
+              </span>
+              <span className="pace-sub">
+                {pace.activeDays}/{paceStats.elapsed} 天有支出
+              </span>
+            </div>
+
+            <div className="pace-cell pace-trend">
+              <span className="pace-label">日均趋势</span>
+              <Chart option={sparkOption} height={44} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 两个卡片都只放一张图 → 天然等高，不再出现「左边比右边长一截」 */}
       <div className="grid-2 section-gap">

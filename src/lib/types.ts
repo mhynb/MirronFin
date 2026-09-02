@@ -52,6 +52,18 @@ export interface MonthPoint {
   expense: number;
 }
 
+/**
+ * 支出节奏（日均相关）。恒为「纯消费」口径：只统计 transactions 表 type='expense'，
+ * 不含投资申购与账户间转账——那是资产腾挪，算进日均会污染「日常消耗速度」的语义。
+ */
+export interface ExpensePace {
+  total: number;
+  /** 有支出记录的自然天数（日均的第二个口径：花钱那天平均花多少） */
+  activeDays: number;
+  /** 单日支出峰值 */
+  peakDay: number;
+}
+
 // ---------- 投资 ----------
 
 export type AssetType = "fund" | "stock";
