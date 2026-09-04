@@ -1095,10 +1095,24 @@ export default function ReviewPage() {
             </button>
           </div>
         ) : aiLoading ? (
-          <div className="advisor-skeleton">
-            <span></span>
-            <span></span>
-            <span></span>
+          <div>
+            <div className="advisor-skeleton">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            {/* 推理模型（如 deepseek-v4-pro）会先思考 1-2 分钟再出正文，
+                不提示的话用户会以为卡死了 */}
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 12,
+                color: "var(--text-tertiary)",
+                textAlign: "center",
+              }}
+            >
+              分析中，推理模型可能需要 1-2 分钟，请勿关闭页面…
+            </div>
           </div>
         ) : report ? (
           report.structured ? (

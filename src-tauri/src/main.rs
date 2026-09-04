@@ -171,19 +171,29 @@ async fn ask_ai(payload: String) -> Result<JsonValue, String> {
     let system = include_str!("../advisor_system_prompt.md");
     // temperature：财务分析要严谨、不要发散。此前完全没设，用 API 默认 1.0，
     // 同一份数据每次跑出来的结论差异很大。0.3 保留一点措辞灵活性但结论稳定。
-    // max_tokens：给足长度，避免长报告被截断成半个 JSON 导致解析失败回退纯文本。
+    //
+    // 【绝不设 max_tokens】2026-09-04 事故：deepseek-v4-pro 是推理模型，
+    // 思考阶段（reasoning_content）与正文（content）共享输出额度。
+    // 设 4096 后思考吃光全部额度，finish_reason=length、正文 0 字 →
+    // 前端渲染成一张空白报告（用户等 60 秒什么都没有）。
+    // 不设则用服务商默认值（足够大），思考+正文都放得下。
     let body = serde_json::json!({
         "model": model,
         "stream": true,
         "temperature": 0.3,
-        "max_tokens": 4096,
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": payload }
         ]
     });
 
-    let client = reqwest::Client::new();
+    // 超时保护：推理模型思考 60-120 秒是常态，但不允许网络挂死时无限转圈。
+    // connect 15s / 整个请求（含流式读取）300s——正常报告 100 秒左右，3 倍余量。
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
     let resp = client
         .post(&url)
         .bearer_auth(&api_key)
@@ -205,6 +215,8 @@ async fn ask_ai(payload: String) -> Result<JsonValue, String> {
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
     let mut done = false;
+    // 记录流式结束原因：正常 stop / 被截断 length / 内容审查 content_filter
+    let mut finish_reason: Option<String> = None;
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(c) => c,
@@ -228,9 +240,16 @@ async fn ask_ai(payload: String) -> Result<JsonValue, String> {
                             .unwrap_or("未知错误");
                         return Err(msg.to_string());
                     }
-                    let content = v
-                        .get("choices")
-                        .and_then(|c| c.get(0))
+                    let choice = v.get("choices").and_then(|c| c.get(0));
+                    if let Some(fr) = choice
+                        .and_then(|c| c.get("finish_reason"))
+                        .and_then(|f| f.as_str())
+                    {
+                        if !fr.is_empty() {
+                            finish_reason = Some(fr.to_string());
+                        }
+                    }
+                    let content = choice
                         .and_then(|c| c.get("delta"))
                         .and_then(|d| d.get("content"))
                         .and_then(|c| c.as_str())
@@ -244,6 +263,21 @@ async fn ask_ai(payload: String) -> Result<JsonValue, String> {
         if done {
             break;
         }
+    }
+
+    // 空内容护栏（2026-09-04 事故复盘）：推理模型的思考阶段与正文共享输出额度，
+    // 若额度耗尽会出现 finish_reason=length 且正文为空。此前这种情况静默返回空报告，
+    // 用户等一分钟看到一张白卡——必须显式报错让用户知道发生了什么。
+    if full.trim().is_empty() {
+        let fr = finish_reason.unwrap_or_else(|| "未知".to_string());
+        let hint = match fr.as_str() {
+            "length" => "输出额度被思考阶段耗尽（推理模型特性），正文没写出来。".to_string(),
+            "content_filter" => "内容被服务商安全策略拦截。".to_string(),
+            _ => "模型没有生成任何正文。".to_string(),
+        };
+        return Err(format!(
+            "模型未返回内容（结束原因：{fr}）。{hint}请在设置里换一个模型（如 deepseek-chat）重试。"
+        ));
     }
 
     let parsed = extract_json(&full);
