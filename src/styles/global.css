@@ -1619,6 +1619,81 @@ input[type="number"] {
   margin-top: 4px;
 }
 
+/* ---------- AI 复盘：分析视角（技能包） ---------- */
+
+.skill-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-picker-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.skill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 5 个视角用胶囊横排，比 segmented 省地方也好换行 */
+.skill-chip {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.skill-chip:hover:not(:disabled):not(.active) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.skill-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.skill-chip:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* 报告顶部标注本次生成的视角（生成瞬间锁定，不与选择器联动） */
+.advisor-skill-tag {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* AI 引用的数据出处，便于用户核对——也是「不许瞎编」的可见约束 */
+.advisor-item-basis {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin-top: 5px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+}
+
 /* 免责声明 */
 .advisor-disclaimer {
   font-size: 12px;

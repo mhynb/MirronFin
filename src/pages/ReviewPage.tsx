@@ -33,6 +33,7 @@ import {
   type Account,
   type Asset,
   type AssetCategory,
+  ASSET_CATEGORY_LABEL,
   type CheckItem,
   type CheckStatus,
   type InvestmentTxn,
@@ -51,6 +52,19 @@ const PRESETS: { key: string; label: string; months: number | null }[] = [
   { key: "3m", label: "近3月", months: 3 },
   { key: "6m", label: "近6月", months: 6 },
   { key: "1y", label: "近1年", months: 12 },
+];
+
+/**
+ * AI 复盘的分析视角（技能包）。
+ * 名称必须与 advisor_system_prompt.md 里的视角名逐字一致——
+ * prompt 靠这个名字去匹配对应的分析清单。
+ */
+const AI_SKILLS: { name: string; hint: string }[] = [
+  { name: "全面复盘", hint: "投资、消费、退休三条线各抓最要紧的一点" },
+  { name: "消费诊断", hint: "钱花在哪、哪一笔最该管，会点名具体分类" },
+  { name: "投资组合体检", hint: "攻守配比、集中度、跑赢还是跑输大盘" },
+  { name: "退休进度", hint: "按当前节奏还要多少年，提速杠杆在哪" },
+  { name: "本月复盘", hint: "本月 vs 上月，差多少、因为什么" },
 ];
 
 function shiftMonths(months: number): string {
@@ -449,6 +463,142 @@ export default function ReviewPage() {
     };
   }, [assets, trades, navsByAsset, txns, accounts, portfolioXirr, totalMV]);
 
+  // ---------- 消费侧洞察（AI 摘要专用，纯前端从全量流水算） ----------
+  // 此前 AI 只看得到「月均支出」一个总数，关于消费的建议必然是空话。
+  // 这里补齐分类结构、环比、节奏，AI 才说得出生动具体的洞察
+  // （如「人情 2 笔吃掉 67%，餐饮 57 笔只占 7%」）。
+  const spendInsights = useMemo(() => {
+    const now = new Date();
+    const mk = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const curMonth = mk(now);
+    const monthsBack = (n: number) => mk(new Date(now.getFullYear(), now.getMonth() - n, 1));
+    const mkey = (d: string) => d.slice(0, 7);
+
+    const expTxns = txns.filter((t) => t.type === "expense");
+
+    // 近 3 个月（含当月）支出分类，按金额降序取前 8
+    const since3 = monthsBack(2);
+    const catMap = new Map<string, { amt: number; count: number }>();
+    let spend3 = 0;
+    for (const t of expTxns) {
+      if (mkey(t.date) < since3) continue;
+      const key = t.category_name ?? "未分类";
+      const cur = catMap.get(key) ?? { amt: 0, count: 0 };
+      cur.amt += t.amount;
+      cur.count += 1;
+      catMap.set(key, cur);
+      spend3 += t.amount;
+    }
+    const topCats = [...catMap.entries()]
+      .map(([分类, v]) => ({
+        分类,
+        金额: +v.amt.toFixed(2),
+        占比百分比: spend3 > 0 ? +((v.amt / spend3) * 100).toFixed(1) : 0,
+        笔数: v.count,
+        月均: +(v.amt / 3).toFixed(2),
+        单笔均值: +(v.amt / v.count).toFixed(2),
+      }))
+      .sort((a, b) => b.金额 - a.金额)
+      .slice(0, 8);
+
+    // 近 6 个月收支序列（含储蓄率）
+    // 关键：跳过「收入=0 且 支出=0」的未记账月份——混进来会把月均收入严重拉低，
+    // AI 会误以为用户那几个月真的零收入
+    const monthly: {
+      月份: string;
+      收入: number;
+      支出: number;
+      净储蓄: number;
+      储蓄率百分比: number | null;
+      是否完整月: boolean;
+    }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const m = monthsBack(i);
+      const inc = txns
+        .filter((t) => t.type === "income" && mkey(t.date) === m)
+        .reduce((s, t) => s + t.amount, 0);
+      const exp = txns
+        .filter((t) => t.type === "expense" && mkey(t.date) === m)
+        .reduce((s, t) => s + t.amount, 0);
+      if (inc === 0 && exp === 0) continue; // 未记账的月份不进序列
+      const net = inc - exp;
+      monthly.push({
+        月份: m,
+        收入: +inc.toFixed(2),
+        支出: +exp.toFixed(2),
+        净储蓄: +net.toFixed(2),
+        储蓄率百分比: inc > 0 ? +((net / inc) * 100).toFixed(1) : null,
+        是否完整月: i > 0, // i=0 即当月，仍在进行中
+      });
+    }
+
+    // 当月支出节奏
+    const curTxns = expTxns.filter((t) => mkey(t.date) === curMonth);
+    const curTotal = curTxns.reduce((s, t) => s + t.amount, 0);
+    const activeDays = new Set(curTxns.map((t) => t.date)).size;
+    const elapsed = now.getDate();
+    const byDay = new Map<string, number>();
+    for (const t of curTxns) byDay.set(t.date, (byDay.get(t.date) ?? 0) + t.amount);
+    let peak = 0;
+    let peakDate: string | null = null;
+    for (const [d, v] of byDay)
+      if (v > peak) {
+        peak = v;
+        peakDate = d;
+      }
+
+    // 支出环比（当月 vs 上月）
+    // 保护：当月仍在进行中时，已过不足 5 天就不给环比——
+    // 9 月 4 天 vs 8 月整月会算出 -98.8%，技术上没错但严重误导
+    const cur = monthly[monthly.length - 1];
+    const prev = monthly[monthly.length - 2];
+    const comparable = !!cur && !!prev && (cur.是否完整月 || elapsed >= 5);
+    const momPct =
+      comparable && prev!.支出 > 0
+        ? +(((cur!.支出 - prev!.支出) / prev!.支出) * 100).toFixed(1)
+        : null;
+
+    // 储蓄率趋势：后半段均值 vs 前半段均值
+    const valid = monthly.filter((m) => m.储蓄率百分比 !== null);
+    let trend = "数据不足";
+    if (valid.length >= 4) {
+      const half = Math.floor(valid.length / 2);
+      const avg = (arr: typeof valid) =>
+        arr.reduce((s, m) => s + (m.储蓄率百分比 ?? 0), 0) / arr.length;
+      const diff = avg(valid.slice(-half)) - avg(valid.slice(0, half));
+      trend = diff > 3 ? "改善" : diff < -3 ? "恶化" : "稳定";
+    }
+
+    // 近 3 月最大单笔（不含备注，保护隐私）
+    let maxOne: { 分类: string; 金额: number; 日期: string } | null = null;
+    for (const t of expTxns) {
+      if (mkey(t.date) < since3) continue;
+      if (!maxOne || t.amount > maxOne.金额) {
+        maxOne = {
+          分类: t.category_name ?? "未分类",
+          金额: +t.amount.toFixed(2),
+          日期: t.date,
+        };
+      }
+    }
+
+    return {
+      topCats,
+      monthly,
+      curMonth,
+      curTotal: +curTotal.toFixed(2),
+      activeDays,
+      elapsed,
+      peak: +peak.toFixed(2),
+      peakDate,
+      momPct,
+      trend,
+      maxOne,
+      spend3: +spend3.toFixed(2),
+    };
+  }, [txns]);
+
   // ---------- AI 理财顾问 ----------
   const [aiReady, setAiReady] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -463,9 +613,18 @@ export default function ReviewPage() {
   } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [skill, setSkill] = useState(AI_SKILLS[0].name);
+  /** 报告是用哪个视角生成的（生成瞬间锁定，避免中途改视角造成「报告与标签不符」） */
+  const [reportSkill, setReportSkill] = useState(AI_SKILLS[0].name);
 
   // 构造发给 AI 的结构化摘要（只发指标+配置+持仓概览，不含逐笔流水）
   const buildSummary = useCallback((): string => {
+    // 「持有天数」口径修复：单看 < 90 天会全判噪音，让 AI 无话可说。
+    // 把"首次买入日距今"改成「[90天观察期]内观察 vs 已过观察期」——
+    // 前者 AI 转去看配置意图/集中度，后者 AI 就能正常用 XIRR 评价。
+    // 同时把「观察期摘要」放在顶层，让 AI 看到全局而不是一个个标各自算。
+    const NEW_HOLD_DAYS = 90;
+    const nowMs = Date.now();
     const holdings = assets
       .map((a) => {
         const h = computeHolding(a, trades.filter((t) => t.asset_id === a.id));
@@ -474,15 +633,34 @@ export default function ReviewPage() {
         const mv = h.shares * lastNav;
         const pnl = mv - h.cost + h.realized;
         const pct = totalMV > 0 ? (mv / totalMV) * 100 : 0;
+        const firstBuy = h.trades.find((t) => t.type === "buy")?.date ?? null;
+        const holdDays = firstBuy
+          ? Math.max(
+              1,
+              Math.round((nowMs - new Date(firstBuy).getTime()) / 86400000)
+            )
+          : null;
         return {
           名称: a.name,
           类型: a.type === "fund" ? "基金" : "股票",
+          风格: ASSET_CATEGORY_LABEL[a.category] ?? a.category,
           占比百分比: +pct.toFixed(1),
           市值: +mv.toFixed(2),
+          成本: +h.cost.toFixed(2),
           大致盈亏: +pnl.toFixed(2),
+          收益率百分比: h.cost > 0 ? +((pnl / h.cost) * 100).toFixed(2) : null,
+          持有天数: holdDays,
+          是否新仓: holdDays != null && holdDays < NEW_HOLD_DAYS,
+          首次买入日: firstBuy,
         };
       })
       .filter((h) => h.市值 > 0);
+    const holdDaysList = holdings
+      .map((h) => h.持有天数)
+      .filter((d): d is number => d !== null);
+    const maxHoldDays = holdDaysList.length ? Math.max(...holdDaysList) : 0;
+    const minHoldDays = holdDaysList.length ? Math.min(...holdDaysList) : 0;
+    const allNew = holdings.length > 0 && holdDaysList.every((d) => d < NEW_HOLD_DAYS);
 
     const buyTrades = trades.filter((t) => t.type === "buy");
     const sellTrades = trades.filter((t) => t.type === "sell");
@@ -539,6 +717,26 @@ export default function ReviewPage() {
         按当前储蓄预计年数:
           f.yearsToGo == null ? null : +f.yearsToGo.toFixed(1),
       },
+      消费与支出: {
+        近3月支出合计: spendInsights.spend3,
+        近3月支出分类: spendInsights.topCats,
+        当月: {
+          月份: spendInsights.curMonth,
+          支出合计: spendInsights.curTotal,
+          已过天数: spendInsights.elapsed,
+          有支出天数: spendInsights.activeDays,
+          日均支出:
+            spendInsights.elapsed > 0
+              ? +(spendInsights.curTotal / spendInsights.elapsed).toFixed(2)
+              : 0,
+          单日峰值金额: spendInsights.peak,
+          单日峰值日期: spendInsights.peakDate,
+        },
+        近6月月度收支: spendInsights.monthly,
+        当月支出环比百分比: spendInsights.momPct,
+        储蓄率趋势: spendInsights.trend,
+        近3月最大单笔支出: spendInsights.maxOne,
+      },
       资产配置最近月末: last
         ? {
             现金: +last.cash.toFixed(2),
@@ -554,6 +752,18 @@ export default function ReviewPage() {
         股票: +p.stock.toFixed(2),
       })),
       持仓概览: holdings,
+      持仓观察期: holdings.length
+        ? {
+            最长持有天数: maxHoldDays,
+            最短持有天数: minHoldDays,
+            是否全部处于新仓期: allNew,
+            新仓数: holdings.filter((h) => h.是否新仓).length,
+            总持仓数: holdings.length,
+            说明: allNew
+              ? "全部持仓都还在 90 天观察期内，收益率波动基本是噪音；评价侧重配置意图、集中度、交易节奏，收益数据作为参考。"
+              : "部分持仓已过观察期，可正常用收益率评价选品能力。",
+          }
+        : null,
       交易行为: {
         买入次数: buyTrades.length,
         卖出次数: sellTrades.length,
@@ -564,16 +774,18 @@ export default function ReviewPage() {
       },
     };
     return JSON.stringify(summary, null, 2);
-  }, [assets, trades, navsByAsset, totalMV, portfolioXirr, totalPnl, fullDd, fullPeriodPf, fullPeriodBench, alloc, accounts, advisorFacts]);
+  }, [assets, trades, navsByAsset, totalMV, portfolioXirr, totalPnl, fullDd, fullPeriodPf, fullPeriodBench, alloc, accounts, advisorFacts, spendInsights]);
 
   const runAnalysis = useCallback(async () => {
     if (aiLoading) return;
     setAiError(null);
     setReport(null);
+    setReportSkill(skill);
     setAiLoading(true);
     try {
       const summary = buildSummary();
       const userMsg =
+        `本次分析视角：${skill}\n\n` +
         "以下是这位 MirrorFin 用户的复盘数据摘要，请作为理财顾问分析并输出 JSON：\n\n" +
         summary;
       const env = await invoke<{
@@ -592,7 +804,7 @@ export default function ReviewPage() {
     } finally {
       setAiLoading(false);
     }
-  }, [aiLoading, buildSummary]);
+  }, [aiLoading, buildSummary, skill]);
 
   const openAi = () => {
     if (aiReady) runAnalysis();
@@ -852,6 +1064,26 @@ export default function ReviewPage() {
             </button>
           </div>
         </div>
+
+        {/* 分析视角（技能包）：名字必须与 prompt 里的视角名逐字一致，
+            prompt 靠它匹配对应的分析清单，不是装饰 */}
+        <div className="skill-picker">
+          <span className="skill-picker-label">分析视角</span>
+          <div className="skill-chips">
+            {AI_SKILLS.map((s) => (
+              <button
+                key={s.name}
+                className={"skill-chip" + (skill === s.name ? " active" : "")}
+                title={s.hint}
+                disabled={aiLoading}
+                onClick={() => setSkill(s.name)}
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {aiError ? (
           <div>
             <div className="toast toast-error">{aiError}</div>
@@ -873,6 +1105,7 @@ export default function ReviewPage() {
             <AdvisorReport
               content={report.content as AdvisorContent}
               checks={advisorFacts.checks}
+              skill={reportSkill}
               metrics={{
                 xirr: portfolioXirr,
                 excess:

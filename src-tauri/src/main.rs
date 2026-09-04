@@ -169,9 +169,14 @@ async fn ask_ai(payload: String) -> Result<JsonValue, String> {
     };
 
     let system = include_str!("../advisor_system_prompt.md");
+    // temperature：财务分析要严谨、不要发散。此前完全没设，用 API 默认 1.0，
+    // 同一份数据每次跑出来的结论差异很大。0.3 保留一点措辞灵活性但结论稳定。
+    // max_tokens：给足长度，避免长报告被截断成半个 JSON 导致解析失败回退纯文本。
     let body = serde_json::json!({
         "model": model,
         "stream": true,
+        "temperature": 0.3,
+        "max_tokens": 4096,
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": payload }

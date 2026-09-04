@@ -17,18 +17,21 @@ export interface DiagnosisItem {
   标题: string;
   状态: string; // 好 / 一般 / 差
   说明: string;
+  依据?: string; // 可选：AI 引用的原始数据出处，便于用户核对
 }
 
 export interface RiskItem {
   标题: string;
   严重度: string; // 高 / 中 / 低
   说明: string;
+  依据?: string;
 }
 
 export interface AdviceItem {
   优先级: string; // 高 / 中 / 低
   行动: string;
   理由: string;
+  依据?: string;
 }
 
 export interface OneThing {
@@ -103,10 +106,12 @@ export default function AdvisorReport({
   content,
   metrics,
   checks = [],
+  skill,
 }: {
   content: AdvisorContent;
   metrics: AdvisorMetrics;
   checks?: CheckItem[];
+  skill?: string;
 }) {
   const verdict = content.结论;
   const oneThing = content.最该做的一件事;
@@ -119,6 +124,8 @@ export default function AdvisorReport({
 
   return (
     <div>
+      {skill && <div className="advisor-skill-tag">分析视角 · {skill}</div>}
+
       {verdict && (verdict.一句话 || verdict.评级) && (
         <div className="advisor-hero">
           <div className="advisor-hero-top">
@@ -203,6 +210,9 @@ export default function AdvisorReport({
                 <span className="advisor-item-title">{d.标题}</span>
               </div>
               {d.说明 && <div className="advisor-item-desc">{d.说明}</div>}
+              {d.依据 && (
+                <div className="advisor-item-basis">依据 · {d.依据}</div>
+              )}
             </div>
           ))}
         </div>
@@ -222,6 +232,9 @@ export default function AdvisorReport({
                 <span className="advisor-item-title">{r.标题}</span>
               </div>
               {r.说明 && <div className="advisor-item-desc">{r.说明}</div>}
+              {r.依据 && (
+                <div className="advisor-item-basis">依据 · {r.依据}</div>
+              )}
             </div>
           ))}
         </div>
@@ -241,6 +254,9 @@ export default function AdvisorReport({
                 <span className="advisor-item-title">{a.行动}</span>
               </div>
               {a.理由 && <div className="advisor-item-desc">{a.理由}</div>}
+              {a.依据 && (
+                <div className="advisor-item-basis">依据 · {a.依据}</div>
+              )}
             </div>
           ))}
         </div>
