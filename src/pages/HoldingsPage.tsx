@@ -82,6 +82,9 @@ export default function HoldingsPage() {
 
   const sel = vms.find((v) => v.holding.asset.id === selected) ?? null;
 
+  // 市值 hero 大数字：整数/小数拆开，小数降级（与首页 hero 同一语言）
+  const [mvInt, mvDec] = sel ? fmtMoney(sel.mv).split(".") : ["0", "00"];
+
   // 按投资风格分组统计（只算在持仓的，清仓不算）
   const catStats = useMemo(() => {
     const map = new Map<AssetCategory, number>();
@@ -336,6 +339,26 @@ export default function HoldingsPage() {
                   }}
                 />
               </div>
+              <div className="asset-hero">
+                <div>
+                  <div className="stat-label">当前市值</div>
+                  <div className="stat-hero num">
+                    ¥{mvInt}
+                    <span className="hero-dec">.{mvDec}</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="stat-label">持有收益</div>
+                  <div
+                    className={`asset-hero-pnl-value num ${
+                      sel.pnl > 0 ? "text-rise" : sel.pnl < 0 ? "text-fall" : ""
+                    }`}
+                  >
+                    {sel.pnl >= 0 ? "+" : ""}¥{fmtMoney(sel.pnl)}（
+                    {fmtPct(sel.pnlPct)}）
+                  </div>
+                </div>
+              </div>
               <div className="stat-row">
                 <div>
                   <div className="stat-label">持有份额</div>
@@ -352,21 +375,6 @@ export default function HoldingsPage() {
                 <div>
                   <div className="stat-label">最新价</div>
                   <div className="stat-mid num">{sel.price}</div>
-                </div>
-                <div>
-                  <div className="stat-label">当前市值</div>
-                  <div className="stat-mid num">¥{fmtMoney(sel.mv)}</div>
-                </div>
-                <div>
-                  <div className="stat-label">持有收益</div>
-                  <div
-                    className={`stat-mid num ${
-                      sel.pnl > 0 ? "text-rise" : sel.pnl < 0 ? "text-fall" : ""
-                    }`}
-                  >
-                    {sel.pnl >= 0 ? "+" : ""}¥{fmtMoney(sel.pnl)}（
-                    {fmtPct(sel.pnlPct)}）
-                  </div>
                 </div>
                 <div>
                   <div className="stat-label">XIRR 年化</div>

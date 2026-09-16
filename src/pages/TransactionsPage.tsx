@@ -191,6 +191,9 @@ export default function TransactionsPage() {
     };
   }, [pace, series, month]);
 
+  // 日均支出 hero 大数字：整数/小数拆开，小数降级（与首页 hero 同一语言）
+  const [dailyInt, dailyDec] = fmtMoney(paceStats.daily).split(".");
+
   const pieOption = {
     title: {
       text: "¥" + fmtMoney(totalExpense),
@@ -384,7 +387,8 @@ export default function TransactionsPage() {
               <span className="pace-label">日均支出</span>
               <span className="pace-value num">
                 <i>¥</i>
-                {fmtMoney(paceStats.daily)}
+                {dailyInt}
+                <span className="hero-dec">.{dailyDec}</span>
                 <em>/天</em>
               </span>
               <span className="pace-sub">

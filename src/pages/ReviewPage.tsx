@@ -878,47 +878,55 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      <div className="stat-grid section-gap">
-        <div className="card">
-          <div className="stat-label">XIRR 年化（资金加权）</div>
-          <div
-            className={`stat-value num ${
-              (portfolioXirr ?? 0) > 0
-                ? "text-rise"
-                : (portfolioXirr ?? 0) < 0
-                ? "text-fall"
-                : ""
-            }`}
-          >
-            {fmtPct(portfolioXirr)}
-          </div>
-          <div className="stat-hint">考虑每笔资金进出时间</div>
+      <div className="card hero-card section-gap">
+        <div className="hero-label">XIRR 年化（资金加权）</div>
+        <div
+          className={`hero-value num ${
+            (portfolioXirr ?? 0) > 0
+              ? "text-rise"
+              : (portfolioXirr ?? 0) < 0
+              ? "text-fall"
+              : ""
+          }`}
+        >
+          {portfolioXirr == null ? (
+            "—"
+          ) : (
+            <>
+              {fmtPct(portfolioXirr).replace("%", "")}
+              <span className="hero-dec">%</span>
+            </>
+          )}
         </div>
-        <div className="card">
-          <div className="stat-label">当前市值</div>
-          <div className="stat-value num">¥{fmtMoney(totalMV)}</div>
-          <div className="stat-hint">净投入 ¥{fmtMoney(netInvested)}</div>
+        <div className="hero-sub">
+          真实收益率，考虑每笔资金进出时间 · 净投入 ¥{fmtMoney(netInvested)}
         </div>
-        <div className="card">
-          <div className="stat-label">累计收益</div>
-          <div
-            className={`stat-value num ${
-              totalPnl > 0 ? "text-rise" : totalPnl < 0 ? "text-fall" : ""
-            }`}
-          >
-            {totalPnl >= 0 ? "+" : ""}¥{fmtMoney(totalPnl)}
+        <div className="hero-metrics">
+          <div className="hero-metric">
+            <div className="hero-metric-label">当前市值</div>
+            <div className="hero-metric-value num">¥{fmtMoney(totalMV)}</div>
           </div>
-          <div className="stat-hint">
-            持有成本 ¥{fmtMoney(costSum)}
+          <div className="hero-metric">
+            <div className="hero-metric-label">累计收益</div>
+            <div
+              className={`hero-metric-value num ${
+                totalPnl > 0 ? "text-rise" : totalPnl < 0 ? "text-fall" : ""
+              }`}
+            >
+              {totalPnl >= 0 ? "+" : ""}¥{fmtMoney(totalPnl)}
+            </div>
+            <div className="hero-metric-sub">
+              持有成本 ¥{fmtMoney(costSum)}
+            </div>
           </div>
-        </div>
-        <div className="card">
-          <div className="stat-label">最大回撤</div>
-          <div className="stat-value num text-fall">
-            {dd ? `-${fmtPct(dd.pct)}` : "—"}
-          </div>
-          <div className="stat-hint">
-            {dd ? `${dd.peakDate} → ${dd.troughDate}` : "数据不足"}
+          <div className="hero-metric">
+            <div className="hero-metric-label">最大回撤</div>
+            <div className="hero-metric-value num text-fall">
+              {dd ? `-${fmtPct(dd.pct)}` : "—"}
+            </div>
+            <div className="hero-metric-sub">
+              {dd ? `${dd.peakDate} → ${dd.troughDate}` : "数据不足"}
+            </div>
           </div>
         </div>
       </div>

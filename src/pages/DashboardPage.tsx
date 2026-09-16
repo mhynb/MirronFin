@@ -6,9 +6,11 @@ import Chart from "../components/Chart";
 import ReconcileModal from "../components/ReconcileModal";
 import { IconChevronRight, IconPlus } from "../components/Icons";
 import {
+  allocationTrend,
   buildAssetValueSeries,
   computeHolding,
   flowAdjustedCumReturn,
+  lastMonthEnds,
   mergeSeries,
   monthRealized,
   type ValuePoint,
@@ -22,6 +24,7 @@ import {
   listAssets,
   listInvestmentTxns,
   listNavSnapshots,
+  listTransactions,
   monthSummary,
   recentTransactions,
   setMeta,
@@ -40,6 +43,7 @@ import {
   type Account,
   type AssetCategory,
   type MonthSummary,
+  type NavPoint,
   type Transaction,
 } from "../lib/types";
 
@@ -74,6 +78,7 @@ export default function DashboardPage() {
   });
   const [invRealized, setInvRealized] = useState(0);
   const [recent, setRecent] = useState<Transaction[]>([]);
+  const [nwSeries, setNwSeries] = useState<number[]>([]);
   const [showBackup, setShowBackup] = useState(false);
   const [backupMsg, setBackupMsg] = useState("");
   const [showOpening, setShowOpening] = useState(false);
@@ -86,9 +91,11 @@ export default function DashboardPage() {
   const month = currentMonth();
 
   const loadInvestments = useCallback(async () => {
-    const [assetsAll, tradesAll] = await Promise.all([
+    const [assetsAll, tradesAll, txnsAll, accs] = await Promise.all([
       listAssets(),
       listInvestmentTxns(),
+      listTransactions({}),
+      listAccounts(),
     ]);
     const used = assetsAll.filter((a) =>
       tradesAll.some((t) => t.asset_id === a.id)
@@ -97,6 +104,7 @@ export default function DashboardPage() {
     let stockMV = 0;
     const catMV: Partial<Record<AssetCategory, number>> = {};
     const perAsset: ValuePoint[][] = [];
+    const navsByAsset = new Map<number, NavPoint[]>();
     for (const a of used) {
       const ts = tradesAll.filter((t) => t.asset_id === a.id);
       const h = computeHolding(a, ts);
@@ -107,6 +115,7 @@ export default function DashboardPage() {
       else stockMV += mv;
       catMV[a.category] = (catMV[a.category] ?? 0) + mv;
       const navs = await listNavSnapshots(a.id);
+      navsByAsset.set(a.id, navs);
       perAsset.push(buildAssetValueSeries(ts, navs));
     }
     const merged = mergeSeries(perAsset);
@@ -120,6 +129,16 @@ export default function DashboardPage() {
       ),
     });
     setInvRealized(monthRealized(tradesAll, month));
+    // 净资产月度序列：喂 hero 迷你走势曲线 + 「较上月」环比
+    const alloc = allocationTrend(
+      lastMonthEnds(12),
+      txnsAll,
+      tradesAll,
+      used,
+      navsByAsset,
+      accs
+    );
+    setNwSeries(alloc.map((p) => p.cash + p.fund + p.stock + p.housing));
   }, []);
 
   useEffect(() => {
@@ -275,6 +294,35 @@ export default function DashboardPage() {
   const netWorth = cash + inv.fundMV + inv.stockMV + housingBalance;
   const balance = summary.income - summary.expense;
 
+  // hero 大数字：整数/小数拆开，小数降级
+  const [nwInt, nwDec] = fmtMoney(netWorth).split(".");
+  // 较上月环比：上月末净资产为 0（刚开始记账）时不显示，避免 "+全部身家" 的怪话
+  const prevNW = nwSeries.length >= 2 ? nwSeries[nwSeries.length - 2] : null;
+  const nwDelta = prevNW !== null && prevNW > 0 ? netWorth - prevNW : null;
+  // 迷你走势曲线（220×56，全部为零时不画）
+  const spark = (() => {
+    if (nwSeries.length < 2) return null;
+    const W = 220;
+    const H = 56;
+    const PAD = 4;
+    const min = Math.min(...nwSeries);
+    const max = Math.max(...nwSeries);
+    if (max <= 0) return null;
+    const span = max - min || 1;
+    const step = (W - PAD * 2) / (nwSeries.length - 1);
+    const pts = nwSeries.map(
+      (v, i) =>
+        [
+          +(PAD + i * step).toFixed(1),
+          +(H - PAD - ((v - min) / span) * (H - PAD * 2)).toFixed(1),
+        ] as [number, number]
+    );
+    return {
+      points: pts.map((p) => p.join(",")).join(" "),
+      end: pts[pts.length - 1],
+    };
+  })();
+
   const allocOption = {
     tooltip: {
       trigger: "item",
@@ -368,52 +416,94 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="stat-grid section-gap">
-        <div className="card">
-          <div className="stat-label">净资产</div>
-          <div className="stat-value num">¥{fmtMoney(netWorth)}</div>
-          <div className="stat-hint">
-            现金 ¥{fmtMoney(cash)} · 基金 ¥{fmtMoney(inv.fundMV)} · 股票 ¥
-            {fmtMoney(inv.stockMV)}
+      <div className="card hero-card section-gap">
+        <div className="hero-label">净资产</div>
+        <div className="hero-top">
+          <div className="hero-value num">
+            ¥{nwInt}
+            <span className="hero-dec">.{nwDec}</span>
           </div>
+          {spark && (
+            <svg
+              className="hero-spark"
+              width="220"
+              height="56"
+              viewBox="0 0 220 56"
+            >
+              <polyline
+                points={spark.points}
+                fill="none"
+                stroke="var(--accent)"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <circle
+                cx={spark.end[0]}
+                cy={spark.end[1]}
+                r="3"
+                fill="var(--accent)"
+              />
+            </svg>
+          )}
         </div>
-        <div className="card">
-          <div className="stat-label">本月收入</div>
-          <div className="stat-value num text-rise">
-            +¥{fmtMoney(summary.income)}
+        <div className="hero-sub">
+          {nwDelta !== null && (
+            <>
+              较上月{" "}
+              <span className={nwDelta >= 0 ? "text-rise" : "text-fall"}>
+                {nwDelta >= 0 ? "+" : "-"}¥{fmtMoney(Math.abs(nwDelta))}
+              </span>
+              {" · "}
+            </>
+          )}
+          现金 ¥{fmtMoney(cash)} · 基金 ¥{fmtMoney(inv.fundMV)} · 股票 ¥
+          {fmtMoney(inv.stockMV)}
+          {housingBalance > 0.005 && (
+            <> · 公积金 ¥{fmtMoney(housingBalance)}</>
+          )}
+        </div>
+        <div className="hero-metrics">
+          <div className="hero-metric">
+            <div className="hero-metric-label">本月收入</div>
+            <div className="hero-metric-value num text-rise">
+              +¥{fmtMoney(summary.income)}
+            </div>
+            <div className="hero-metric-sub">{monthLabel(month)}</div>
           </div>
-          <div className="stat-hint">{monthLabel(month)}</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">本月支出</div>
-          <div className="stat-value num">¥{fmtMoney(summary.expense)}</div>
-          <div className="stat-hint">纯消费口径，投资不算支出</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">本月结余</div>
-          <div
-            className={`stat-value num ${
-              balance > 0 ? "text-rise" : balance < 0 ? "text-fall" : ""
-            }`}
-          >
-            {balance >= 0 ? "+" : ""}¥{fmtMoney(balance)}
+          <div className="hero-metric">
+            <div className="hero-metric-label">本月支出</div>
+            <div className="hero-metric-value num">
+              ¥{fmtMoney(summary.expense)}
+            </div>
+            <div className="hero-metric-sub">纯消费口径，投资不算支出</div>
           </div>
-          <div className="stat-hint">收入 − 支出</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">本月投资已实现</div>
-          <div
-            className={`stat-value num ${
-              invRealized > 0
-                ? "text-rise"
-                : invRealized < 0
-                ? "text-fall"
-                : ""
-            }`}
-          >
-            {invRealized >= 0 ? "+" : "-"}¥{fmtMoney(Math.abs(invRealized))}
+          <div className="hero-metric">
+            <div className="hero-metric-label">本月结余</div>
+            <div
+              className={`hero-metric-value num ${
+                balance > 0 ? "text-rise" : balance < 0 ? "text-fall" : ""
+              }`}
+            >
+              {balance >= 0 ? "+" : ""}¥{fmtMoney(balance)}
+            </div>
+            <div className="hero-metric-sub">收入 − 支出</div>
           </div>
-          <div className="stat-hint">清仓盈亏，不计入现金结余</div>
+          <div className="hero-metric">
+            <div className="hero-metric-label">本月投资已实现</div>
+            <div
+              className={`hero-metric-value num ${
+                invRealized > 0
+                  ? "text-rise"
+                  : invRealized < 0
+                  ? "text-fall"
+                  : ""
+              }`}
+            >
+              {invRealized >= 0 ? "+" : "-"}¥{fmtMoney(Math.abs(invRealized))}
+            </div>
+            <div className="hero-metric-sub">清仓盈亏，不计入现金结余</div>
+          </div>
         </div>
       </div>
 

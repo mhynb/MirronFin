@@ -159,7 +159,8 @@ export default function RetirementPage() {
               <div>
                 <div className="retire-progress-label">退休进度</div>
                 <div className="retire-progress-pct num">
-                  {fmtPct(progressCapped / 100)}
+                  {fmtPct(progressCapped / 100).replace("%", "")}
+                  <span className="hero-dec">%</span>
                 </div>
               </div>
               <div className="retire-progress-status">

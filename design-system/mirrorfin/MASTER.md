@@ -37,7 +37,17 @@ font-family: -apple-system, "SF Pro Display", "SF Pro Text", "PingFang SC",
 ```
 - 不加载任何网络字体，纯系统字体栈（SF Pro 在 macOS、苹方在 iOS、雅黑在 Windows 各自生效）
 - 数字：`font-variant-numeric: tabular-nums;`（报表对齐的灵魂）
-- 大金额数字：34px / 600；页面标题：28px / 700；卡片标题：13px / 500 次文字；正文：14px / 400
+- **Hero 大数字：60px / 400 / letter-spacing -2px**（`.hero-value`，如首页净资产）——超大数字用**细字重**（Apple 做法，粗黑大数字显愣）；**小数部分拆出降级**为 0.47em + 三级文字色（`.hero-dec`），视觉重量全给整数
+- Hero 数字右侧可配 220×56 迷你走势曲线（`.hero-spark`，accent 2px 折线 + 端点圆点），hero-sub 行首放「较上月 ±¥x」环比锚点（上月末为 0 时不显示）
+- 卡片内统计数字：28px / 600（`.stat-value`）；指标带次级数字：17px / 500（`.hero-metric-value`，无竖分隔线、gap 32 纯留白分组）；其余页面指标：19px / 600（`.stat-mid` / `.pace-value` 体系）
+- 页面标题：32px / 700 / letter-spacing -0.5px；卡片标题：13px / 600 次文字 + letter-spacing 0.2px；正文：14px / 400
+- **每页只允许一个 hero 视觉焦点**，其余信息用更小的字级主动退让：
+  - 首页 = 净资产 60px / 400（+ 迷你走势曲线 + 较上月环比）
+  - 收支 = 日均支出 40px / 400（`.pace-cell.lead`，小数降级）
+  - 持仓 = 选中标的当前市值 40px / 400（`.stat-hero`，持有收益 20px 伴随，其余指标收 hairline 下）
+  - 复盘 = XIRR 年化 60px / 400（首页同款 hero 卡，市值/累计收益/回撤收指标带）
+  - 退休 = 进度百分比 52px / 400（% 符号 `.hero-dec` 降级）
+  - 录入 = 金额输入 48px / 400
 
 ## 3. 形状与空间
 
@@ -57,7 +67,8 @@ font-family: -apple-system, "SF Pro Display", "SF Pro Text", "PingFang SC",
 
 - **按钮**：主按钮 = `--accent` 实底白字、radius 8、高 36px；次按钮 = 白底 `--border` 边框；hover 只变透明度/底色（0.15s ease），**禁止位移/缩放**
 - **输入框**：白底、1px `--border`、radius 8、高 36px；focus = 边框变 `--accent` + 3px `#007AFF26` 外环
-- **卡片**：白底、radius 12、`--shadow-card`、padding 20px；非可点卡片无 hover 态
+- **卡片**：白底、1px hairline 边框、radius 12、`--shadow-card`、padding 24px；非可点卡片无 hover 态
+- **Hero 卡**（`.hero-card`）：padding 28px；hero 数字下方用 hairline 分隔 + 横向指标带（`.hero-metrics`，纯留白 gap 分组、无竖线）收编次级指标，禁止再摆一排平起平坐的统计卡
 - **分段控件（如 支出/收入/转账）**：`#E9E9EB` 底、白色滑块带微阴影——Apple 标志性控件
 - **导航**：左侧栏 220px，macOS 风；选中项 = `#007AFF1A` 圆角底 + `--accent` 图标文字
 - **图标**：内联 SVG，1.5px 描边、圆角线帽，Phosphor 风格；**禁止 emoji 当图标**
