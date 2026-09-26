@@ -994,6 +994,16 @@ input[type="number"] {
   align-items: start;
 }
 
+/* 持仓双栏各自独立滚动：左列表再长也不把右详情顶出视口。
+   sticky + 视口封顶：页面滚动时两栏钉在可视区内，互不拖拽。 */
+.mv-list,
+.mv-detail {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
 .asset-item {
   padding: 12px;
   border-radius: var(--radius-sm);
@@ -1009,6 +1019,28 @@ input[type="number"] {
 .asset-item.active {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* 「已清仓」折叠开关：清仓的退出主列表，收进这里（数据保留供复盘） */
+.closed-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.closed-toggle:hover {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-secondary);
 }
 
 .stat-row {
@@ -1145,6 +1177,14 @@ input[type="number"] {
 @media (max-width: 1100px) {
   .mv-layout {
     grid-template-columns: 1fr;
+  }
+
+  /* 窄窗口单栏：恢复整页滚动，两栏不再钉住 */
+  .mv-list,
+  .mv-detail {
+    position: static;
+    max-height: none;
+    overflow: visible;
   }
 }
 
@@ -1840,6 +1880,69 @@ input[type="number"] {
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ---------- AI 追问对话（agent 化） ---------- */
+
+.advisor-chat {
+  margin-top: 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.04);
+  padding-top: 16px;
+}
+
+.advisor-chat-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.advisor-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.chat-msg {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-user {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.chat-ai {
+  align-self: flex-start;
+  max-width: 92%;
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-primary);
+}
+
+.chat-status {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input-row .input {
+  flex: 1;
 }
 
 @media (max-width: 560px) {

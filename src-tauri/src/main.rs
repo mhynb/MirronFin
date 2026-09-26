@@ -4,7 +4,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use futures_util::StreamExt;
 use serde_json::Value as JsonValue;
 use tauri_plugin_http::reqwest;
 
@@ -93,44 +92,17 @@ fn ai_report_path() -> Result<PathBuf, String> {
     Ok(home.join("MirrorFin").join("ai_last_report.json"))
 }
 
-/// 从 LLM 输出里提取 JSON 对象。
-/// 兼容三种情况：裸 JSON、```json 代码块包裹、JSON 前后带散文。
-/// 取首个 `{` 到末个 `}` 之间的子串再解析，失败返回 None。
-fn extract_json(text: &str) -> Option<JsonValue> {
-    let t = text.trim();
-    // 去掉 ```json ... ``` 或 ``` ... ``` 围栏
-    let t = if t.starts_with("```") {
-        let inner = t
-            .trim_start_matches("```json")
-            .trim_start_matches("```");
-        inner.trim_end_matches("```").trim()
-    } else {
-        t
-    };
-    if let Ok(v) = serde_json::from_str::<JsonValue>(t) {
-        if v.is_object() {
-            return Some(v);
-        }
-    }
-    if let (Some(start), Some(end)) = (t.find('{'), t.rfind('}')) {
-        if end > start {
-            if let Ok(v) = serde_json::from_str::<JsonValue>(&t[start..=end]) {
-                if v.is_object() {
-                    return Some(v);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// 调用用户自带的 OpenAI 兼容接口，做理财顾问分析。
-/// 配置从本地 ai_config.json 读取（Key 不进前端）。
-/// 累积完整流式响应后解析为结构化 JSON；解析失败则回退为纯文本。
-/// 返回 envelope：{ structured: bool, content: <解析后的对象 或 原始文本> }，
-/// 并把 envelope 持久化到 ai_last_report.json，供下次进入页面直接回显。
+/// Agent 模式的 AI 调用：前端编排完整 messages（含 system）与 tools，
+/// 本函数只做一次非流式请求并原样返回响应体（含 tool_calls / reasoning_content）。
+/// 工具执行、循环控制、JSON 解析全部在前端（TS）完成——数据层本来就在 TS 侧，
+/// Rust 只当 HTTP 中转，避免数据访问双份实现。
+///
+/// 【绝不设 max_tokens】2026-09-04 事故：deepseek-v4-pro 是推理模型，
+/// 思考阶段（reasoning_content）与正文（content）共享输出额度。
+/// 设上限会导致思考烧光额度、finish_reason=length、正文 0 字。
+/// 不设则用服务商默认值（足够大），思考+正文都放得下。
 #[tauri::command]
-async fn ask_ai(payload: String) -> Result<JsonValue, String> {
+async fn ask_ai_agent(messages: String, tools: String) -> Result<JsonValue, String> {
     let path = ai_config_path()?;
     let cfg: JsonValue = if path.exists() {
         let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -168,27 +140,25 @@ async fn ask_ai(payload: String) -> Result<JsonValue, String> {
         format!("{}/v1/chat/completions", base)
     };
 
-    let system = include_str!("../advisor_system_prompt.md");
-    // temperature：财务分析要严谨、不要发散。此前完全没设，用 API 默认 1.0，
-    // 同一份数据每次跑出来的结论差异很大。0.3 保留一点措辞灵活性但结论稳定。
-    //
-    // 【绝不设 max_tokens】2026-09-04 事故：deepseek-v4-pro 是推理模型，
-    // 思考阶段（reasoning_content）与正文（content）共享输出额度。
-    // 设 4096 后思考吃光全部额度，finish_reason=length、正文 0 字 →
-    // 前端渲染成一张空白报告（用户等 60 秒什么都没有）。
-    // 不设则用服务商默认值（足够大），思考+正文都放得下。
-    let body = serde_json::json!({
-        "model": model,
-        "stream": true,
-        "temperature": 0.3,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": payload }
-        ]
-    });
+    let messages: JsonValue = serde_json::from_str(&messages)
+        .map_err(|e| format!("messages 不是合法 JSON: {e}"))?;
+    let tools: JsonValue = serde_json::from_str(&tools)
+        .map_err(|e| format!("tools 不是合法 JSON: {e}"))?;
 
-    // 超时保护：推理模型思考 60-120 秒是常态，但不允许网络挂死时无限转圈。
-    // connect 15s / 整个请求（含流式读取）300s——正常报告 100 秒左右，3 倍余量。
+    // temperature：财务分析要严谨、不要发散。0.3 保留一点措辞灵活性但结论稳定。
+    let mut body = serde_json::json!({
+        "model": model,
+        "stream": false,
+        "temperature": 0.3,
+        "messages": messages,
+    });
+    // tools 为空数组时不要传该字段（部分服务商对空 tools 报错）
+    if tools.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+        body["tools"] = tools;
+        body["tool_choice"] = serde_json::json!("auto");
+    }
+
+    // 超时保护：推理模型每个思考轮 60-120 秒是常态。connect 15s / 总 300s。
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(300))
@@ -209,95 +179,56 @@ async fn ask_ai(payload: String) -> Result<JsonValue, String> {
         return Err(format!("HTTP {status}: {txt}"));
     }
 
-    let mut stream = resp.bytes_stream();
-    // 用字节缓冲按行切分：多字节 UTF-8 字符可能跨 chunk，
-    // 若对每个 chunk 直接 from_utf8_lossy 会把半个汉字解码成 U+FFFD 乱码
-    let mut buf: Vec<u8> = Vec::new();
-    let mut full = String::new();
-    let mut done = false;
-    // 记录流式结束原因：正常 stop / 被截断 length / 内容审查 content_filter
-    let mut finish_reason: Option<String> = None;
-    while let Some(chunk) = stream.next().await {
-        let chunk = match chunk {
-            Ok(c) => c,
-            Err(e) => return Err(format!("读取流失败: {e}")),
-        };
-        buf.extend_from_slice(&chunk);
-        while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
-            let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
-            let line = String::from_utf8_lossy(&line_bytes).trim_end().to_string();
-            if let Some(data) = line.strip_prefix("data:") {
-                let data = data.trim();
-                if data == "[DONE]" {
-                    done = true;
-                    break;
-                }
-                if let Ok(v) = serde_json::from_str::<JsonValue>(data) {
-                    if let Some(err) = v.get("error") {
-                        let msg = err
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("未知错误");
-                        return Err(msg.to_string());
-                    }
-                    let choice = v.get("choices").and_then(|c| c.get(0));
-                    if let Some(fr) = choice
-                        .and_then(|c| c.get("finish_reason"))
-                        .and_then(|f| f.as_str())
-                    {
-                        if !fr.is_empty() {
-                            finish_reason = Some(fr.to_string());
-                        }
-                    }
-                    let content = choice
-                        .and_then(|c| c.get("delta"))
-                        .and_then(|d| d.get("content"))
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("");
-                    if !content.is_empty() {
-                        full.push_str(content);
-                    }
-                }
-            }
-        }
-        if done {
-            break;
-        }
+    let v: JsonValue = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+    if let Some(err) = v.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("未知错误");
+        return Err(msg.to_string());
     }
-
-    // 空内容护栏（2026-09-04 事故复盘）：推理模型的思考阶段与正文共享输出额度，
-    // 若额度耗尽会出现 finish_reason=length 且正文为空。此前这种情况静默返回空报告，
-    // 用户等一分钟看到一张白卡——必须显式报错让用户知道发生了什么。
-    if full.trim().is_empty() {
-        let fr = finish_reason.unwrap_or_else(|| "未知".to_string());
-        let hint = match fr.as_str() {
-            "length" => "输出额度被思考阶段耗尽（推理模型特性），正文没写出来。".to_string(),
-            "content_filter" => "内容被服务商安全策略拦截。".to_string(),
-            _ => "模型没有生成任何正文。".to_string(),
-        };
-        return Err(format!(
-            "模型未返回内容（结束原因：{fr}）。{hint}请在设置里换一个模型（如 deepseek-chat）重试。"
-        ));
-    }
-
-    let parsed = extract_json(&full);
-    let envelope = match parsed {
-        Some(obj) => serde_json::json!({ "structured": true, "content": obj }),
-        None => serde_json::json!({ "structured": false, "content": full }),
-    };
-    // 持久化最近一次报告（失败不阻塞主流程，仅记录）
-    if let Err(e) = save_report(&envelope) {
-        eprintln!("保存报告失败: {e}");
-    }
-    Ok(envelope)
+    Ok(v)
 }
 
-/// 保存最近一次复盘报告 envelope 到本地文件。
-fn save_report(envelope: &JsonValue) -> Result<(), String> {
+/// 保存最近一次复盘（报告 + 追问对话）envelope 到本地文件。
+/// 内容由前端组装（报告 JSON、视角、日期、聊天记录），本函数只负责落盘。
+#[tauri::command]
+fn save_ai_report(envelope: JsonValue) -> Result<(), String> {
     let path = ai_report_path()?;
-    let s = serde_json::to_string_pretty(envelope).map_err(|e| e.to_string())?;
+    let s = serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())?;
     fs::write(&path, s).map_err(|e| format!("写入报告失败: {e}"))?;
     Ok(())
+}
+
+/// AI 复盘历史的本地路径：%USERPROFILE%/MirrorFin/ai_history.json
+fn ai_history_path() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法定位用户目录".to_string())?;
+    Ok(home.join("MirrorFin").join("ai_history.json"))
+}
+
+/// 追加写入复盘历史（跨报告的「记忆」：日期/视角/结论/建议清单）。
+/// 数组内容由前端维护（只保留最近 N 条），本函数只负责落盘。
+#[tauri::command]
+fn save_ai_history(payload: JsonValue) -> Result<(), String> {
+    let path = ai_history_path()?;
+    let s = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    fs::write(&path, s).map_err(|e| format!("写入复盘历史失败: {e}"))?;
+    Ok(())
+}
+
+/// 读取复盘历史；文件不存在或损坏返回空数组。
+#[tauri::command]
+fn load_ai_history() -> Result<JsonValue, String> {
+    let path = ai_history_path()?;
+    if !path.exists() {
+        return Ok(serde_json::json!([]));
+    }
+    let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let v: JsonValue = serde_json::from_str(&s).unwrap_or(serde_json::json!([]));
+    Ok(v)
 }
 
 /// 读取最近一次复盘报告 envelope；文件不存在返回 Null（前端按无报告处理）。
@@ -323,8 +254,11 @@ fn main() {
             save_ai_config,
             ai_configured,
             load_ai_config,
-            ask_ai,
-            load_ai_report
+            ask_ai_agent,
+            save_ai_report,
+            load_ai_report,
+            save_ai_history,
+            load_ai_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running MirrorFin");

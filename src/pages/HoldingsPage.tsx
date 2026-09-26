@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Chart from "../components/Chart";
 import { IconTrash } from "../components/Icons";
@@ -40,7 +40,70 @@ const TYPE_BADGE = { buy: "badge-buy", sell: "badge-sell", dividend: "badge-div"
 export default function HoldingsPage() {
   const [vms, setVms] = useState<HoldingVM[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
+  const [showClosed, setShowClosed] = useState(false);
   const [navs, setNavs] = useState<NavPoint[]>([]);
+  const detailRef = useRef<HTMLDivElement>(null);
+
+  /** 资产列表项（在持仓与已清仓共用一套渲染） */
+  const renderItem = (v: HoldingVM) => {
+    const a = v.holding.asset;
+    const active = selected === a.id;
+    return (
+      <div
+        key={a.id}
+        className={`asset-item ${active ? "active" : ""}`}
+        onClick={() => setSelected(a.id)}
+      >
+        <div style={{ fontWeight: 600 }}>{a.name}</div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--text-secondary)",
+            marginTop: 2,
+          }}
+        >
+          {a.type === "fund" ? "基金" : "股票"} · {a.code} ·{" "}
+          <span style={{ color: ASSET_CATEGORY_COLOR[a.category] }}>
+            {ASSET_CATEGORY_LABEL[a.category]}
+          </span>
+          {v.holding.shares === 0 && " · 已清仓"}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: 6,
+            fontSize: 13,
+          }}
+        >
+          <span className="num">¥{fmtMoney(v.mv)}</span>
+          {v.holding.shares === 0 ? (
+            <span
+              className={`num ${
+                v.holding.realized > 0
+                  ? "text-rise"
+                  : v.holding.realized < 0
+                  ? "text-fall"
+                  : ""
+              }`}
+            >
+              {v.holding.realized >= 0 ? "+¥" : "-¥"}
+              {fmtMoney(Math.abs(v.holding.realized))} 已实现
+            </span>
+          ) : (
+            <span
+              className={`num ${
+                v.pnl > 0 ? "text-rise" : v.pnl < 0 ? "text-fall" : ""
+              }`}
+            >
+              {v.pnl >= 0 ? "+" : ""}
+              {fmtPct(v.pnlPct)}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
   const [syncMsg, setSyncMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<{
@@ -82,6 +145,17 @@ export default function HoldingsPage() {
 
   const sel = vms.find((v) => v.holding.asset.id === selected) ?? null;
 
+  // 在持仓 / 已清仓分组：清仓的退出主列表，收进默认折叠的「已清仓」区。
+  // 交易数据一条不删——已实现收益 / XIRR / 复盘都靠它。
+  const openVms = vms.filter((v) => v.holding.shares > 0);
+  const closedVms = vms
+    .filter((v) => v.holding.shares === 0)
+    .sort((a, b) => {
+      const la = a.holding.trades[a.holding.trades.length - 1]?.date ?? "";
+      const lb = b.holding.trades[b.holding.trades.length - 1]?.date ?? "";
+      return lb.localeCompare(la); // 最近清仓的在最前
+    });
+
   // 市值 hero 大数字：整数/小数拆开，小数降级（与首页 hero 同一语言）
   const [mvInt, mvDec] = sel ? fmtMoney(sel.mv).split(".") : ["0", "00"];
 
@@ -111,6 +185,11 @@ export default function HoldingsPage() {
   useEffect(() => {
     if (selected !== null) listNavSnapshots(selected).then(setNavs);
   }, [selected, vms]);
+
+  // 切换标的时右栏回到顶部——详情 hero（当前市值）必须第一时间可见
+  useEffect(() => {
+    detailRef.current?.scrollTo({ top: 0 });
+  }, [selected]);
 
   async function onSync() {
     setSyncing(true);
@@ -231,70 +310,31 @@ export default function HoldingsPage() {
       </div>
 
       <div className="mv-layout">
-        <div className="card" style={{ padding: 8 }}>
-          {vms.map((v) => {
-            const a = v.holding.asset;
-            const active = selected === a.id;
-            return (
-              <div
-                key={a.id}
-                className={`asset-item ${active ? "active" : ""}`}
-                onClick={() => setSelected(a.id)}
+        <div className="card mv-list" style={{ padding: 8 }}>
+          {openVms.map(renderItem)}
+
+          {closedVms.length > 0 && (
+            <>
+              <button
+                className="closed-toggle"
+                onClick={() => setShowClosed((s) => !s)}
               >
-                <div style={{ fontWeight: 600 }}>{a.name}</div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--text-secondary)",
-                    marginTop: 2,
-                  }}
-                >
-                  {a.type === "fund" ? "基金" : "股票"} · {a.code} ·{" "}
-                  <span style={{ color: ASSET_CATEGORY_COLOR[a.category] }}>
-                    {ASSET_CATEGORY_LABEL[a.category]}
-                  </span>
-                  {v.holding.shares === 0 && " · 已清仓"}
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    marginTop: 6,
-                    fontSize: 13,
-                  }}
-                >
-                  <span className="num">¥{fmtMoney(v.mv)}</span>
-                  {v.holding.shares === 0 ? (
-                    <span
-                      className={`num ${
-                        v.holding.realized > 0
-                          ? "text-rise"
-                          : v.holding.realized < 0
-                          ? "text-fall"
-                          : ""
-                      }`}
-                    >
-                      {v.holding.realized >= 0 ? "+¥" : "-¥"}
-                      {fmtMoney(Math.abs(v.holding.realized))} 已实现
-                    </span>
-                  ) : (
-                    <span
-                      className={`num ${
-                        v.pnl > 0 ? "text-rise" : v.pnl < 0 ? "text-fall" : ""
-                      }`}
-                    >
-                      {v.pnl >= 0 ? "+" : ""}
-                      {fmtPct(v.pnlPct)}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                <span>
+                  已清仓 · {closedVms.length} 个
+                </span>
+                <span>{showClosed ? "收起 ↑" : "展开 ↓"}</span>
+              </button>
+              {showClosed && closedVms.map(renderItem)}
+            </>
+          )}
         </div>
 
         {sel && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div
+            className="mv-detail"
+            ref={detailRef}
+            style={{ display: "flex", flexDirection: "column", gap: 16 }}
+          >
             <div className="card">
               <div className="card-title">
                 {sel.holding.asset.name}（{sel.holding.asset.code}）

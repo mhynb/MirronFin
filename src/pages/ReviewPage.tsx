@@ -3,6 +3,18 @@ import { Link } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import Chart from "../components/Chart";
 import AdvisorReport, { type AdvisorContent } from "../components/AdvisorReport";
+import SYSTEM_PROMPT from "../prompts/advisor_system_prompt.md?raw";
+import {
+  appendHistory,
+  buildMemoryBlock,
+  extractJson,
+  loadHistory,
+  loadReport,
+  runAgentLoop,
+  saveReport,
+  type AgentMessage,
+  type ChatTurn,
+} from "../lib/aiAgent";
 import {
   allocationTrend,
   benchmarkCumReturn,
@@ -616,6 +628,14 @@ export default function ReviewPage() {
   const [skill, setSkill] = useState(AI_SKILLS[0].name);
   /** 报告是用哪个视角生成的（生成瞬间锁定，避免中途改视角造成「报告与标签不符」） */
   const [reportSkill, setReportSkill] = useState(AI_SKILLS[0].name);
+  /** agent 状态条文案（"正在查看：分类支出明细…"） */
+  const [aiStatus, setAiStatus] = useState("");
+  /** 追问对话（随报告持久化，重开可续聊） */
+  const [chat, setChat] = useState<ChatTurn[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  /** 报告的原始文本（追问时重建模型上下文用；结构化报告是其 JSON 字符串） */
+  const [reportRaw, setReportRaw] = useState("");
 
   // 构造发给 AI 的结构化摘要（只发指标+配置+持仓概览，不含逐笔流水）
   const buildSummary = useCallback((): string => {
@@ -776,23 +796,63 @@ export default function ReviewPage() {
     return JSON.stringify(summary, null, 2);
   }, [assets, trades, navsByAsset, totalMV, portfolioXirr, totalPnl, fullDd, fullPeriodPf, fullPeriodBench, alloc, accounts, advisorFacts, spendInsights]);
 
+  /** 拼 user 消息底座：视角 + 记忆区块 + 摘要 + 双模式说明（报告 JSON / 追问自然语言） */
+  const buildBaseUserMsg = useCallback(
+    (skillName: string, memory: string): string =>
+      `本次分析视角：${skillName}\n\n` +
+      memory +
+      "以下是这位 MirrorFin 用户的复盘数据摘要：\n" +
+      "- 生成复盘报告时：请作为理财顾问分析并输出 JSON；\n" +
+      "- 之后的追问：用自然语言简洁回答，可继续调用工具查数据。\n\n" +
+      buildSummary(),
+    [buildSummary]
+  );
+
   const runAnalysis = useCallback(async () => {
     if (aiLoading) return;
     setAiError(null);
     setReport(null);
+    setChat([]);
     setReportSkill(skill);
     setAiLoading(true);
+    setAiStatus("正在思考…");
     try {
-      const summary = buildSummary();
-      const userMsg =
-        `本次分析视角：${skill}\n\n` +
-        "以下是这位 MirrorFin 用户的复盘数据摘要，请作为理财顾问分析并输出 JSON：\n\n" +
-        summary;
-      const env = await invoke<{
-        structured: boolean;
-        content: AdvisorContent | string;
-      }>("ask_ai", { payload: userMsg });
+      // 记忆注入：上次报告的结论+建议清单 → AI 先评估执行情况再产出新报告
+      const history = await loadHistory();
+      const userMsg = buildBaseUserMsg(skill, buildMemoryBlock(history));
+      const { reply } = await runAgentLoop(
+        [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMsg },
+        ],
+        setAiStatus
+      );
+      const parsed = extractJson(reply);
+      const env: { structured: boolean; content: AdvisorContent | string } =
+        parsed
+          ? {
+              structured: true,
+              content: parsed as unknown as AdvisorContent,
+            }
+          : { structured: false, content: reply };
       setReport(env);
+      setReportRaw(reply);
+      const date = todayStr();
+      await saveReport({ ...env, skill, date, chat: [] });
+      // 结构化报告才进记忆（纯文本降级说明解析失败，不值得当记忆）
+      if (parsed) {
+        const c = parsed as unknown as AdvisorContent;
+        await appendHistory({
+          date,
+          skill,
+          结论: c.结论?.一句话,
+          最该做的一件事: c.最该做的一件事?.行动,
+          建议: (c.建议 ?? []).map((a) => ({
+            优先级: a.优先级,
+            行动: a.行动,
+          })),
+        });
+      }
     } catch (e) {
       const msg = typeof e === "string" ? e : String(e);
       if (msg === "__CONFIG_ERROR__") {
@@ -803,8 +863,60 @@ export default function ReviewPage() {
       }
     } finally {
       setAiLoading(false);
+      setAiStatus("");
     }
-  }, [aiLoading, buildSummary, skill]);
+  }, [aiLoading, buildBaseUserMsg, skill]);
+
+  /** 追问的模型上下文：system + 摘要底座 + 报告原文 + 对话。摘要是现算的——数据始终新鲜 */
+  const buildChatContext = useCallback(
+    (turns: ChatTurn[]): AgentMessage[] => {
+      const msgs: AgentMessage[] = [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: buildBaseUserMsg(reportSkill, "") },
+      ];
+      if (reportRaw) msgs.push({ role: "assistant", content: reportRaw });
+      for (const t of turns) msgs.push({ role: t.role, content: t.content });
+      return msgs;
+    },
+    [buildBaseUserMsg, reportSkill, reportRaw]
+  );
+
+  const sendChat = useCallback(async () => {
+    const q = chatInput.trim();
+    if (!q || chatLoading || aiLoading || !report) return;
+    setChatLoading(true);
+    setAiStatus("正在思考…");
+    const next: ChatTurn[] = [...chat, { role: "user", content: q }];
+    setChat(next);
+    setChatInput("");
+    try {
+      const { reply } = await runAgentLoop(
+        buildChatContext(next),
+        setAiStatus
+      );
+      const finalChat: ChatTurn[] = [
+        ...next,
+        { role: "assistant", content: reply },
+      ];
+      setChat(finalChat);
+      await saveReport({
+        structured: report.structured,
+        content: report.content,
+        skill: reportSkill,
+        date: todayStr(),
+        chat: finalChat,
+      });
+    } catch (e) {
+      const msg = typeof e === "string" ? e : String(e);
+      setChat([
+        ...next,
+        { role: "assistant", content: `出错了：${msg}` },
+      ]);
+    } finally {
+      setChatLoading(false);
+      setAiStatus("");
+    }
+  }, [chat, chatInput, chatLoading, aiLoading, report, reportSkill, buildChatContext]);
 
   const openAi = () => {
     if (aiReady) runAnalysis();
@@ -839,12 +951,21 @@ export default function ReviewPage() {
         }
       })
       .catch(() => {});
-    // 回显最近一次持久化的报告（不必重新调用 AI）
-    invoke<{ structured: boolean; content: AdvisorContent | string } | null>(
-      "load_ai_report"
-    )
+    // 回显最近一次持久化的报告 + 追问对话（不必重新调用 AI）
+    loadReport()
       .then((saved) => {
-        if (saved) setReport(saved);
+        if (!saved) return;
+        setReport({
+          structured: saved.structured,
+          content: saved.content as AdvisorContent | string,
+        });
+        if (saved.skill) setReportSkill(saved.skill);
+        setChat(saved.chat ?? []);
+        setReportRaw(
+          typeof saved.content === "string"
+            ? saved.content
+            : JSON.stringify(saved.content)
+        );
       })
       .catch(() => {});
   }, [loaded]);
@@ -1109,8 +1230,8 @@ export default function ReviewPage() {
               <span></span>
               <span></span>
             </div>
-            {/* 推理模型（如 deepseek-v4-pro）会先思考 1-2 分钟再出正文，
-                不提示的话用户会以为卡死了 */}
+            {/* agent 状态条：实时显示模型在思考还是在调工具查数据，
+                避免长时间无反馈让用户以为卡死 */}
             <div
               style={{
                 marginTop: 10,
@@ -1119,7 +1240,10 @@ export default function ReviewPage() {
                 textAlign: "center",
               }}
             >
-              分析中，推理模型可能需要 1-2 分钟，请勿关闭页面…
+              {aiStatus || "正在思考…"}
+              <div style={{ marginTop: 4, opacity: 0.7 }}>
+                顾问会边查数据边推理，可能需要 1-3 分钟，请勿关闭页面
+              </div>
             </div>
           </div>
         ) : report ? (
@@ -1144,6 +1268,52 @@ export default function ReviewPage() {
           <div className="empty">
             <div className="empty-sub">
               点击右上角「AI 复盘」，让顾问基于当前数据给出分析与建议。
+            </div>
+          </div>
+        )}
+
+        {/* 追问对话：报告不是终点。对话随报告持久化，重开 app 可续聊。
+            中文输入法下 Enter 处于组词状态（isComposing）时不触发发送 */}
+        {report && !aiLoading && !aiError && (
+          <div className="advisor-chat">
+            <div className="advisor-chat-title">追问顾问</div>
+            {chat.length > 0 && (
+              <div className="advisor-chat-list">
+                {chat.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`chat-msg ${
+                      m.role === "user" ? "chat-user" : "chat-ai"
+                    }`}
+                  >
+                    {m.content}
+                  </div>
+                ))}
+              </div>
+            )}
+            {chatLoading && (
+              <div className="chat-status">{aiStatus || "思考中…"}</div>
+            )}
+            <div className="chat-input-row">
+              <input
+                className="input"
+                value={chatInput}
+                placeholder="继续问，比如：餐饮明细拉给我看看"
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    sendChat();
+                  }
+                }}
+                disabled={chatLoading}
+              />
+              <button
+                className="btn btn-primary"
+                onClick={sendChat}
+                disabled={chatLoading || !chatInput.trim()}
+              >
+                发送
+              </button>
             </div>
           </div>
         )}

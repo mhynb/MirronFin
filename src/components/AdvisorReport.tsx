@@ -1,7 +1,8 @@
 /**
  * AI 理财顾问的结构化复盘报告渲染。
  *
- * 数据来源：后端 ask_ai 解析 LLM 输出得到的 JSON（见 advisor_system_prompt.md）。
+ * 数据来源：agent 循环（src/lib/aiAgent.ts）解析 LLM 输出得到的 JSON
+ * （契约见 src/prompts/advisor_system_prompt.md）。
  * 关键数字（XIRR/超额/回撤）不由 AI 回显，而由前端用已算好的指标注入，
  * 保证和复盘页面上方指标卡完全一致、不被 AI 取整或改写。
  *
